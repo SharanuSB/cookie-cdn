@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cookie Banner</title>
+    <style>
+        /* Reset styles */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        }
+        
+        /* Hide everything by default until properly initialized */
+        .cookie-banner-container {
+            display: none;
+        }
+
+        /* Base styles */
+        :root {
+            --primary-color: #4A90E2;
+            --text-color: #333333;
+            --background-color: #ffffff;
+            --border-color: #eaeaea;
+            --error-color: #dc3545;
+            --success-color: #28a745;
+            --warning-color: #ffc107;
+        }
+
+        /* Accessibility styles */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* Focus styles */
+        *:focus {
+            outline: 2px solid var(--primary-color);
+            outline-offset: 2px;
+        }
+
+        /* High contrast mode */
+        @media (forced-colors: active) {
+            *:focus {
+                outline: 2px solid CanvasText;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- The cookie banner will be dynamically inserted here -->
+    <script>
+        (function() {
+            'use strict';
+            
+            // Version check
+            const VERSION = '1.1.0';
+            const parentVersion = new URLSearchParams(window.location.search).get('version');
+            
+            if (parentVersion && parentVersion !== VERSION) {
+                console.warn(`Version mismatch: Parent ${parentVersion}, Iframe ${VERSION}`);
+            }
+            
+            // Parse URL parameters
+            function getURLParams() {
+                const params = {};
+                const queryString = window.location.search.substring(1);
+                const pairs = queryString.split('&');
+                
+                for (let i = 0; i < pairs.length; i++) {
+                    const pair = pairs[i].split('=');
+                    params[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1] || '');
+                }
+                
+                return params;
+            }
+            
+            // Post message to parent window
+            function postToParent(action, data) {
+                if (window.parent) {
+                    window.parent.postMessage({
+                        source: 'cookie-banner',
+                        action: action,
+                        data: data,
+                        version: VERSION
+                    }, window.parent.origin);
+                }
+            }
+            
+            // Error handling
+            function handleError(error) {
+                console.error('Cookie Banner Error:', error);
+                postToParent('error', { 
+                    message: error.message,
+                    code: error.code || 'UNKNOWN_ERROR'
+                });
+            }
+            
+            // Storage management
+            const storage = {
+                get: function(key) {
+                    try {
+                        return localStorage.getItem(key);
+                    } catch (error) {
+                        handleError(new Error('Storage access denied'));
+                        return null;
+                    }
+                },
+                set: function(key, value) {
+                    try {
+                        localStorage.setItem(key, value);
+                    } catch (error) {
+                        handleError(new Error('Storage quota exceeded'));
+                    }
+                },
+                remove: function(key) {
+                    try {
+                        localStorage.removeItem(key);
+                    } catch (error) {
+                        handleError(new Error('Storage access denied'));
+                    }
+                }
+            };
+            
+            // Listen for messages from parent
+            window.addEventListener('message', function(event) {
+                // Verify origin
+                if (event.origin !== window.parent.origin) {
+                    return;
+                }
+
+                if (event.data?.source === 'cookie-banner-parent') {
+                    try {
+                        switch (event.data.action) {
+                            case 'show':
+                                showBanner();
+                                break;
+                            case 'hide':
+                                hideBanner();
+                                break;
+                            case 'reset':
+                                resetPreferences();
+                                break;
+                            default:
+                                handleError(new Error(`Unknown action: ${event.data.action}`));
+                        }
+                    } catch (error) {
+                        handleError(error);
+                    }
+                }
+            });
+            
+            // Get parameters from URL
+            const params = getURLParams();
+            const clientId = params.clientId;
+            const domain = params.domain || '';
+            const apiEndpoint = params.endpoint || 'http://localhost:4400/bluetic-svc/api/v1/cookie';
+            
+            if (!clientId) {
+                handleError(new Error('Client ID is required'));
+                return;
+            }
+            
+            /**
+             * CookieBannerSDK
+             * @version 1.1.0 (iframe version)
+             */
+            class CookieBannerSDK {
+                constructor(clientId, options = {}) {
+                    if (!clientId) {
+                        throw new Error('Client ID is required');
+                    }
+
+                    this.clientId = clientId;
+                    this.options = {
+                        apiEndpoint: options.apiEndpoint || apiEndpoint,
+                        onAcceptAll: options.onAcceptAll || function() {},
+                        onRejectAll: options.onRejectAll || function() {},
+                        onSavePreferences: options.onSavePreferences || function() {},
+                        onBannerShown: options.onBannerShown || function() {},
+                        onBannerClosed: options.onBannerClosed || function() {},
+                        onModalShown: options.onModalShown || function() {},
+                        onModalClosed: options.onModalClosed || function() {},
+                        onError: options.onError || function() {}
+                    };
+
+                    this.bannerData = null;
+                    this.bannerElement = null;
+                    this.modalElement = null;
+                    this.initialized = false;
+                    this.defaultCookieTypes = [
+                        { 
+                            name: "Necessary", 
+                            description: "Essential cookies that enable basic website functionality and security features. These cannot be disabled.", 
+                            status: "Enabled" 
+                        },
+                        { 
+                            name: "Preferences", 
+                            description: "Cookies that remember your settings and choices to enhance your experience on our site.", 
+                            status: "Enabled" 
+                        },
+                        { 
+                            name: "Analytics", 
+                            description: "Cookies that help us understand how visitors interact with our website by collecting anonymous information.", 
+                            status: "Enabled" 
+                        },
+                        { 
+                            name: "Marketing", 
+                            description: "Cookies used to track visitors across websites to display relevant advertisements.", 
+                            status: "Enabled" 
+                        },
+                        { 
+                            name: "Functional", 
+                            description: "Cookies that enable certain website features and improve your browsing experience.", 
+                            status: "Enabled" 
+                        },
+                        { 
+                            name: "Other", 
+                            description: "Other cookies that do not fall into the above categories.", 
+                            status: "Enabled" 
+                        }
+                    ];
+                }
+
+                // Initialize the SDK
+                init() {
+                    return new Promise((resolve, reject) => {
+                        // Check if already initialized
+                        if (this.initialized) {
+                            return resolve(this.bannerData);
+                        }
+
+                        // Fetch banner configuration
+                        this.fetchBannerConfig()
+                            .then(data => {
+                                this.bannerData = data.data;
+                                // Ensure we have cookie types data, or use defaults
+                                if(this.bannerData.domain !== window.location.origin) {
+                                    throw new Error('Invalid domain');
+                                }
+                                if (!this.bannerData.cookie_types || this.bannerData.cookie_types.length === 0) {
+                                    this.bannerData.cookie_types = this.defaultCookieTypes;
+                                }
+
+                                this.initialized = true;
+                                this.injectStyles();
+                                
+                                // Notify parent that initialization is complete
+                                postToParent('initialized', { 
+                                    clientId: this.clientId,
+                                    hasPreferences: this.hasPreferences()
+                                });
+                                
+                                resolve(data);
+                            })
+                            .catch(error => {
+                                console.log(this.options.apiEndpoint, "apiEndpoint")
+                                console.error('Failed to initialize Cookie Banner SDK:', error);
+                                postToParent('error', { message: 'Failed to initialize' });
+                                reject(error);
+                            });
+                    });
+                }
+
+                // Fetch the banner configuration from the API
+                fetchBannerConfig() {
+                    return new Promise((resolve, reject) => {
+                        fetch(`http://localhost:4400/bluetic-svc/api/v1/cookie/${this.clientId}/client`, {
+                            headers: {
+                                'Content-Type': 'application/json', 
+                                'Access-Control-Allow-Origin': '*'
+                            }
+                        })
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`HTTP error! status: ${response.status}`);
+                            }
+                            //verify the domain here
+                            return response.json();
+                        })
+                        .then(data => resolve(data))
+                        .catch(err => reject(err));
+                    });
+                }
+
+                // Inject the CSS styles
+                injectStyles() {
+                    const styleId = 'cookie-banner-sdk-styles';
+                    // Skip if styles already exist
+                    if (document.getElementById(styleId)) {
+                        return;
+                    }
+
+                    const style = document.createElement('style');
+                    style.id = styleId;
+
+                    // Define styles based on theme and position
+                    const theme = this.bannerData.banner_settings.theme || 'light';
+                    const position = this.bannerData.banner_settings.position || 'right-bottom';
+
+                    function getPositionStyles(position) {
+                        switch (position) {
+                            case 'right-top':
+                                return 'top: 20px; right: 20px;';
+                            case 'right-bottom':
+                                return 'bottom: 20px; right: 20px;';
+                            case 'left-top':
+                                return 'top: 20px; left: 20px;';
+                            case 'left-bottom':
+                                return 'bottom: 20px; left: 20px;';
+                            case 'center':
+                                return 'top: 50%; left: 50%; transform: translate(-50%, -50%);';
+                            default:
+                                // Fallback style if an unknown position is provided
+                                return 'bottom: 20px; right: 20px;';
+                        }
+                    }
+
+                    const positionStyles = getPositionStyles(position);
+
+                    style.textContent = `
+                        /* Base styles */
+                        .cookie-banner-container {
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+                            position: fixed !important;
+                            z-index: 2147483647 !important;
+                            background-color: ${theme === 'light' ? '#ffffff' : '#333333'};
+                            color: ${theme === 'light' ? '#333333' : '#ffffff'};
+                            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+                            border-radius: 12px;
+                            max-width: 400px;
+                            width: calc(100% - 40px);
+                            padding: 24px;
+                            display: block !important;
+                            visibility: visible !important;
+                            opacity: 1 !important;
+                            ${positionStyles}
+                        }
+                        
+                        /* Banner Typography */
+                        .cookie-banner-heading {
+                            font-size: 20px;
+                            font-weight: 600;
+                            margin: 0 0 12px 0;
+                            color: ${theme === 'light' ? '#333333' : '#ffffff'};
+                        }
+                        
+                        .cookie-banner-description {
+                            font-size: 14px;
+                            line-height: 1.6;
+                            margin: 0 0 20px 0;
+                            color: ${theme === 'light' ? '#555555' : '#cccccc'};
+                        }
+                        
+                        /* Banner Buttons */
+                        .cookie-banner-buttons {
+                            display: flex;
+                            flex-wrap: wrap;
+                            gap: 8px;
+                            justify-content: flex-end;
+                        }
+                        
+                        .cookie-banner-button {
+                            padding: 8px 16px;
+                            border-radius: 6px;
+                            border: none;
+                            font-size: 13px;
+                            font-weight: 500;
+                            cursor: pointer;
+                            transition: all 0.2s ease;
+                            text-align: center;
+                            min-width: 100px;
+                            white-space: nowrap;
+                        }
+                        
+                        .cookie-banner-button-primary {
+                            background-color: #4A90E2;
+                            color: white;
+                            flex: 0 0 auto;
+                        }
+                        
+                        .cookie-banner-button-primary:hover {
+                            background-color: #3A80D2;
+                            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+                        }
+                        
+                        .cookie-banner-button-secondary {
+                            background-color: ${theme === 'light' ? '#f5f5f5' : '#555555'};
+                            color: ${theme === 'light' ? '#333333' : '#ffffff'};
+                            flex: 0 0 auto;
+                        }
+                        
+                        .cookie-banner-button-secondary:hover {
+                            background-color: ${theme === 'light' ? '#e5e5e5' : '#666666'};
+                            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+                        }
+                        
+                        .cookie-banner-link {
+                            color: #4A90E2;
+                            text-decoration: underline;
+                            font-size: 14px;
+                            transition: color 0.2s;
+                        }
+                        
+                        .cookie-banner-link:hover {
+                            color: #3A80D2;
+                        }
+                        
+                        /* Modal Overlay */
+                        .cookie-modal-overlay {
+                            position: fixed;
+                            top: 0;
+                            left: 0;
+                            right: 0;
+                            bottom: 0;
+                            background-color: rgba(0, 0, 0, 0.5);
+                            z-index: 2147483647;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            padding: 20px;
+                        }
+                        
+                        /* Modal Container */
+                        .cookie-modal-container {
+                            background-color: ${theme === 'light' ? '#ffffff' : '#333333'};
+                            color: ${theme === 'light' ? '#333333' : '#ffffff'};
+                            border-radius: 12px;
+                            max-width: 600px;
+                            width: 100%;
+                            max-height: 90vh;
+                            overflow-y: auto;
+                            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+                            animation: cookieModalFadeIn 0.3s ease;
+                        }
+                        
+                        @keyframes cookieModalFadeIn {
+                            from { opacity: 0; transform: translateY(20px); }
+                            to { opacity: 1; transform: translateY(0); }
+                        } 
+                        
+                        .cookie-modal-header {
+                            padding: 20px 24px;
+                            border-bottom: 1px solid ${theme === 'light' ? '#eaeaea' : '#444444'};
+                        }
+                        
+                        .cookie-modal-title {
+                            font-size: 22px;
+                            font-weight: 600;
+                            margin: 0;
+                            color: ${theme === 'light' ? '#333333' : '#ffffff'};
+                        }
+                        
+                        .cookie-modal-description {
+                            margin: 10px 0 0 0;
+                            font-size: 14px;
+                            line-height: 1.6;
+                            color: ${theme === 'light' ? '#555555' : '#cccccc'};
+                        }
+                        
+                        .cookie-modal-content {
+                            padding: 20px 24px;
+                        }
+                        
+                        .cookie-type-section {
+                            margin-bottom: 24px;
+                        }
+                        
+                        .cookie-type-header {
+                            display: flex;
+                            align-items: flex-start;
+                            margin-bottom: 8px;
+                        }
+                        
+                        .cookie-type-label {
+                            margin-left: 10px;
+                            flex: 1;
+                        }
+                        
+                        .cookie-type-title {
+                            font-weight: 600;
+                            font-size: 16px;
+                            margin: 0 0 4px 0;
+                            color: ${theme === 'light' ? '#333333' : '#ffffff'};
+                        }
+                        
+                        .cookie-type-description {
+                            font-size: 14px;
+                            margin: 0;
+                            color: ${theme === 'light' ? '#555555' : '#cccccc'};
+                            line-height: 1.5;
+                        }
+                        
+                        .cookie-modal-footer {
+                            padding: 20px 24px;
+                            border-top: 1px solid ${theme === 'light' ? '#eaeaea' : '#444444'};
+                            display: flex;
+                            justify-content: flex-end;
+                            gap: 12px;
+                        }
+                        
+                        /* Checkbox styling */
+                        .cookie-checkbox {
+                            width: 20px;
+                            height: 20px;
+                            cursor: pointer;
+                        }
+                        
+                        .cookie-checkbox:disabled {
+                            cursor: not-allowed;
+                            opacity: 0.7;
+                        }
+                        
+                        /* Responsive adjustments */
+                        @media (max-width: 480px) {
+                            .cookie-banner-container {
+                                bottom: 0 !important;
+                                left: 0 !important;
+                                right: 0 !important;
+                                width: 100% !important;
+                                max-width: 100% !important;
+                                border-radius: 12px 12px 0 0 !important;
+                                transform: none !important;
+                            }
+                            
+                            .cookie-modal-container {
+                                max-height: 85vh;
+                                border-radius: 12px;
+                            }
+                            
+                            .cookie-modal-footer {
+                                flex-direction: column-reverse;
+                            }
+                            
+                            .cookie-modal-footer button {
+                                width: 100%;
+                            }
+                        }
+                    `;
+
+                    document.head.appendChild(style);
+                }
+
+                // Show the banner
+                show() {
+                    if (!this.initialized) {
+                        console.error('Cookie Banner SDK not initialized. Call init() first.');
+                        return this;
+                    }
+
+                    // Return if already shown
+                    if (this.bannerElement) {
+                        return this;
+                    }
+
+                    // Create banner element
+                    const banner = document.createElement('div');
+                    banner.className = 'cookie-banner-container';
+
+                    // Set explicit inline styles to ensure visibility
+                    banner.style.position = 'fixed';
+                    banner.style.zIndex = '2147483647';
+                    banner.style.display = 'block';
+                    banner.style.visibility = 'visible';
+                    banner.style.opacity = '1';
+
+                    banner.innerHTML = this.generateBannerHTML();
+                    
+                    // Add event listeners
+                    this.attachBannerEventListeners(banner);
+                    
+                    // Add to DOM
+                    document.body.appendChild(banner);
+                    this.bannerElement = banner;
+
+                    // Force reflow
+                    void banner.offsetHeight;
+
+                    // Trigger callback
+                    this.options.onBannerShown(this.bannerData);
+                    
+                    // Notify parent
+                    postToParent('bannerShown', {});
+
+                    return this;
+                }
+
+                /**
+                 * Generate the HTML content for the banner
+                 * @private
+                 * @returns {string} HTML for the banner
+                 */
+                generateBannerHTML() {
+                    const privacyUrl = this.bannerData.banner_settings.privacy_url || '#';
+
+                    return `
+                        <h3 class="cookie-banner-heading">Cookie Preferences</h3>
+                        <p class="cookie-banner-description">
+                            We use cookies to enhance your browsing experience and analyze our traffic.
+                            Please select which cookies you want to allow on this site.
+                            <a href="${privacyUrl}" target="_blank" class="cookie-banner-link">Privacy Policy</a>
+                        </p>
+                        
+                        <div class="cookie-banner-buttons">
+                            <button class="cookie-banner-button cookie-banner-button-secondary" data-action="reject-all">
+                                Reject All
+                            </button>
+                            <button class="cookie-banner-button cookie-banner-button-secondary" data-action="manage">
+                                Manage Cookies
+                            </button>
+                            <button class="cookie-banner-button cookie-banner-button-primary" data-action="accept-all">
+                                Accept All
+                            </button>
+                        </div>
+                    `;
+                }
+
+                /**
+                 * Attach event listeners to banner buttons
+                 * @private
+                 * @param {HTMLElement} banner The banner element
+                 */
+                attachBannerEventListeners(banner) {
+                    const buttons = banner.querySelectorAll('.cookie-banner-button');
+
+                    buttons.forEach(button => {
+                        button.addEventListener('click', (event) => {
+                            const action = button.getAttribute('data-action');
+
+                            switch (action) {
+                                case 'accept-all':
+                                    this.acceptAll();
+                                    break;
+
+                                case 'reject-all':
+                                    this.rejectAll();
+                                    break;
+
+                                case 'manage':
+                                    this.showPreferencesModal();
+                                    break;
+                            }
+                        });
+                    });
+                }
+
+                /**
+                 * Show the preferences modal
+                 * @returns {CookieBannerSDK} The SDK instance
+                 */
+                showPreferencesModal() {
+                    if (this.modalElement) {
+                        return this;
+                    }
+
+                    // Create modal overlay
+                    const modalOverlay = document.createElement('div');
+                    modalOverlay.className = 'cookie-modal-overlay';
+
+                    // Create modal container
+                    const modalContainer = document.createElement('div');
+                    modalContainer.className = 'cookie-modal-container';
+
+                    // Add modal content
+                    modalContainer.innerHTML = this.generateModalHTML();
+
+                    // Add modal to overlay
+                    modalOverlay.appendChild(modalContainer);
+
+                    // Add to DOM
+                    document.body.appendChild(modalOverlay);
+                    this.modalElement = modalOverlay;
+
+                    // Add event listeners
+                    this.attachModalEventListeners(modalContainer);
+
+                    // Trigger callback
+                    this.options.onModalShown();
+                    
+                    // Notify parent
+                    postToParent('modalShown', {});
+
+                    return this;
+                }
+
+                generateModalHTML() {
+                    const types = this.bannerData.cookie_types;
+                    const privacyUrl = this.bannerData.banner_settings.privacy_url || '#';
+
+                    let cookieTypesHTML = '';
+
+                    types.filter(type => type.status === 'Enabled').forEach(type => {
+                        const isNecessary = type.name === 'Necessary';
+                        const isEnabled = type.status === 'Enabled';
+
+                        cookieTypesHTML += `
+                            <div class="cookie-type-section">
+                                <div class="cookie-type-header">
+                                    <input 
+                                        type="checkbox" 
+                                        id="modal-cookie-type-${type.name.toLowerCase()}" 
+                                        class="cookie-checkbox"
+                                        ${isEnabled ? 'checked' : ''}
+                                        ${isNecessary ? 'disabled checked' : ''}
+                                    >
+                                    <div class="cookie-type-label">
+                                        <h4 class="cookie-type-title">${type.name} ${isNecessary ? '(Required)' : ''}</h4>
+                                        <p class="cookie-type-description">${type.description || ''}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+
+                    return `
+                        <div class="cookie-modal-header">
+                            <h3 class="cookie-modal-title">Privacy Preferences</h3>
+                            <p class="cookie-modal-description">
+                                Manage your cookie preferences below. Required cookies cannot be disabled as they
+                                are necessary for the website to function properly.
+                                <a href="${privacyUrl}" target="_blank" class="cookie-banner-link">Privacy Policy</a>
+                            </p>
+                        </div>
+                        
+                        <div class="cookie-modal-content">
+                            ${cookieTypesHTML}
+                        </div>
+                        
+                        <div class="cookie-modal-footer">
+                            <button class="cookie-banner-button cookie-banner-button-secondary" data-action="cancel">
+                                Cancel
+                            </button>
+                            <button class="cookie-banner-button cookie-banner-button-primary" data-action="save-preferences">
+                                Save Preferences
+                            </button>
+                        </div>
+                    `;
+                }
+
+                attachModalEventListeners(modal) {
+                    // Close when clicking outside the modal
+                    this.modalElement.addEventListener('click', (event) => {
+                        if (event.target === this.modalElement) {
+                            this.closeModal();
+                        }
+                    });
+
+                    // Button event listeners
+                    const buttons = modal.querySelectorAll('.cookie-banner-button');
+
+                    buttons.forEach(button => {
+                        button.addEventListener('click', (event) => {
+                            const action = button.getAttribute('data-action');
+
+                            switch (action) {
+                                case 'save-preferences':
+                                    this.saveModalPreferences();
+                                    this.closeModal();
+                                    this.close();
+                                    break;
+
+                                case 'cancel':
+                                    this.closeModal();
+                                    break;
+                            }
+                        });
+                    });
+                }
+
+                closeModal() {
+                    if (this.modalElement) {
+                        document.body.removeChild(this.modalElement);
+                        this.modalElement = null;
+
+                        // Trigger callback
+                        this.options.onModalClosed();
+                        
+                        // Notify parent
+                        postToParent('modalClosed', {});
+                    }
+
+                    return this;
+                }
+
+                saveModalPreferences() {
+                    const preferences = {};
+
+                    this.bannerData.cookie_types.forEach(type => {
+                        const checkbox = document.getElementById(`modal-cookie-type-${type.name.toLowerCase()}`);
+
+                        // Necessary cookies are always enabled
+                        if (type.name === 'Necessary') {
+                            preferences[type.name.toLowerCase()] = true;
+                            return;
+                        }
+
+                        preferences[type.name.toLowerCase()] = checkbox ? checkbox.checked : false;
+                    });
+
+                    this.saveCookiePreferences(preferences);
+                    this.options.onSavePreferences(preferences);
+                    
+                    // Notify parent
+                    postToParent('preferencesChanged', preferences);
+
+                    return preferences;
+                }
+
+                acceptAll() {
+                    const preferences = {};
+
+                    this.bannerData.cookie_types.forEach(type => {
+                        preferences[type.name.toLowerCase()] = true;
+                    });
+
+                    this.saveCookiePreferences(preferences);
+                    this.options.onAcceptAll(preferences);
+                    
+                    // Notify parent
+                    postToParent('acceptAll', preferences);
+                    
+                    this.close();
+
+                    return this;
+                }
+
+                rejectAll() {
+                    const preferences = {};
+
+                    this.bannerData.cookie_types.forEach(type => {
+                        // Necessary cookies are always enabled
+                        preferences[type.name.toLowerCase()] = type.name === 'Necessary';
+                    });
+
+                    this.saveCookiePreferences(preferences);
+                    this.options.onRejectAll(preferences);
+                    
+                    // Notify parent
+                    postToParent('rejectAll', preferences);
+                    
+                    this.close();
+
+                    return this;
+                }
+
+                saveCookiePreferences(preferences) {
+                    const storageKey = `cookie-preferences-${this.clientId}`;
+                    const data = {
+                        preferences,
+                        timestamp: new Date().toISOString(),
+                        version: this.bannerData.cookie_key || '1.0',
+                        domain: domain // Use domain from the URL parameters
+                    };
+
+                    // Store preferences in this iframe's localStorage
+                    localStorage.setItem(storageKey, JSON.stringify(data));
+                }
+
+                isAllowed(cookieType) {
+                    const storageKey = `cookie-preferences-${this.clientId}`;
+                    const storedData = localStorage.getItem(storageKey);
+
+                    if (!storedData) {
+                        // If no preferences saved, only necessary cookies are allowed by default
+                        return cookieType.toLowerCase() === 'necessary';
+                    }
+
+                    try {
+                        const data = JSON.parse(storedData);
+                        return data.preferences[cookieType.toLowerCase()] === true;
+                    } catch (error) {
+                        console.error('Error parsing cookie preferences:', error);
+                        return cookieType.toLowerCase() === 'necessary';
+                    }
+                }
+
+                close() {
+                    if (this.bannerElement) {
+                        document.body.removeChild(this.bannerElement);
+                        this.bannerElement = null;
+
+                        // Trigger callback
+                        this.options.onBannerClosed();
+                        
+                        // Notify parent
+                        postToParent('bannerClosed', {});
+                    }
+
+                    return this;
+                }
+
+                hasPreferences() {
+                    const storageKey = `cookie-preferences-${this.clientId}`;
+                    return localStorage.getItem(storageKey) !== null;
+                }
+
+                resetPreferences() {
+                    const storageKey = `cookie-preferences-${this.clientId}`;
+                    localStorage.removeItem(storageKey);
+                    
+                    // Notify parent
+                    postToParent('preferencesReset', {});
+                    
+                    return this.show();
+                }
+            }
+            
+            // Initialize cookie banner with parameters
+            const cookieBanner = new CookieBannerSDK(clientId, {
+                apiEndpoint: apiEndpoint,
+                onAcceptAll: function(preferences) {
+                    postToParent('preferencesChanged', preferences);
+                },
+                onRejectAll: function(preferences) {
+                    postToParent('preferencesChanged', preferences);
+                },
+                onSavePreferences: function(preferences) {
+                    postToParent('preferencesChanged', preferences);
+                },
+                onError: handleError
+            });
+            
+            // Initialize the SDK
+            cookieBanner.init()
+                .then(() => {
+                    // Check if preferences exist already
+                    if (!cookieBanner.hasPreferences()) {
+                        showBanner();
+                    }
+                })
+                .catch(error => {
+                    handleError(error);
+                });
+                
+            // Function to show banner
+            function showBanner() {
+                try {
+                    cookieBanner.show();
+                } catch (error) {
+                    handleError(error);
+                }
+            }
+            
+            // Function to hide banner
+            function hideBanner() {
+                try {
+                    cookieBanner.close();
+                } catch (error) {
+                    handleError(error);
+                }
+            }
+            
+            // Function to reset preferences
+            function resetPreferences() {
+                try {
+                    cookieBanner.resetPreferences();
+                } catch (error) {
+                    handleError(error);
+                }
+            }
+            
+            // Export to window for debugging
+            window.cookieBanner = cookieBanner;
+        })();
+    </script>
+</body>
+</html>
