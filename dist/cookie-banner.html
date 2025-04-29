@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
     <title>Cookie Banner</title>
     <style>
         /* Reset styles */
@@ -168,7 +169,8 @@
             const params = getURLParams();
             const clientId = params.clientId;
             const domain = params.domain || '';
-            const apiEndpoint = params.endpoint || 'http://localhost:4400/bluetic-svc/api/v1/cookie';
+            // Allow override of API endpoint through URL parameters
+            const apiEndpoint = params.endpoint || 'https://cookie-api.yourdomain.com/api/v1/cookie';
             
             if (!clientId) {
                 handleError(new Error('Client ID is required'));
@@ -247,12 +249,8 @@
                         // Fetch banner configuration
                         this.fetchBannerConfig()
                             .then(data => {
-                                console.log(data, "after getting the data")
                                 this.bannerData = data.data;
                                 // Ensure we have cookie types data, or use defaults
-                                if(this.bannerData.domain !== window.location.origin) {
-                                    throw new Error('Invalid domain');
-                                }
                                 if (!this.bannerData.cookie_types || this.bannerData.cookie_types.length === 0) {
                                     this.bannerData.cookie_types = this.defaultCookieTypes;
                                 }
@@ -269,19 +267,38 @@
                                 resolve(data);
                             })
                             .catch(error => {
-                                console.log(this.options.apiEndpoint, "apiEndpoint")
                                 console.error('Failed to initialize Cookie Banner SDK:', error);
-                                postToParent('error', { message: 'Failed to initialize' });
-                                reject(error);
+                                // Try to continue with default settings
+                                this.bannerData = {
+                                    banner_settings: {
+                                        theme: 'light',
+                                        position: 'right-bottom',
+                                        privacy_url: '#'
+                                    },
+                                    cookie_types: this.defaultCookieTypes,
+                                    domain: domain || window.parent.origin,
+                                    cookie_key: '1.0'
+                                };
+                                
+                                this.initialized = true;
+                                this.injectStyles();
+                                
+                                // Notify parent that initialization is complete with defaults
+                                postToParent('initialized', { 
+                                    clientId: this.clientId,
+                                    hasPreferences: this.hasPreferences(),
+                                    usingDefaults: true
+                                });
+                                
+                                resolve({ data: this.bannerData });
                             });
                     });
                 }
 
                 // Fetch the banner configuration from the API
                 fetchBannerConfig() {
-                    console.log(this.options.apiEndpoint, "before api call")
                     return new Promise((resolve, reject) => {
-                        fetch(`http://localhost:4400/bluetic-svc/api/v1/cookie/${this.clientId}/client`, {
+                        fetch(`${this.options.apiEndpoint}/${this.clientId}/client`, {
                             headers: {
                                 'Content-Type': 'application/json', 
                                 'Access-Control-Allow-Origin': '*'
@@ -291,11 +308,25 @@
                             if (!response.ok) {
                                 throw new Error(`HTTP error! status: ${response.status}`);
                             }
-                            //verify the domain here
                             return response.json();
                         })
                         .then(data => resolve(data))
-                        .catch(err => reject(err));
+                        .catch(err => {
+                            console.error('API fetch error:', err);
+                            // Fallback to use default configuration if API fails
+                            resolve({
+                                data: {
+                                    banner_settings: {
+                                        theme: 'light',
+                                        position: 'right-bottom',
+                                        privacy_url: '#'
+                                    },
+                                    cookie_types: this.defaultCookieTypes,
+                                    domain: domain || window.parent.origin,
+                                    cookie_key: '1.0'
+                                }
+                            });
+                        });
                     });
                 }
 
@@ -556,427 +587,23 @@
 
                     document.head.appendChild(style);
                 }
-
-                // Show the banner
-                show() {
-                    if (!this.initialized) {
-                        console.error('Cookie Banner SDK not initialized. Call init() first.');
-                        return this;
-                    }
-
-                    // Return if already shown
-                    if (this.bannerElement) {
-                        return this;
-                    }
-
-                    // Create banner element
-                    const banner = document.createElement('div');
-                    banner.className = 'cookie-banner-container';
-
-                    // Set explicit inline styles to ensure visibility
-                    banner.style.position = 'fixed';
-                    banner.style.zIndex = '2147483647';
-                    banner.style.display = 'block';
-                    banner.style.visibility = 'visible';
-                    banner.style.opacity = '1';
-
-                    banner.innerHTML = this.generateBannerHTML();
-                    
-                    // Add event listeners
-                    this.attachBannerEventListeners(banner);
-                    
-                    // Add to DOM
-                    document.body.appendChild(banner);
-                    this.bannerElement = banner;
-
-                    // Force reflow
-                    void banner.offsetHeight;
-
-                    // Trigger callback
-                    this.options.onBannerShown(this.bannerData);
-                    
-                    // Notify parent
-                    postToParent('bannerShown', {});
-
-                    return this;
-                }
-
-                /**
-                 * Generate the HTML content for the banner
-                 * @private
-                 * @returns {string} HTML for the banner
-                 */
-                generateBannerHTML() {
-                    const privacyUrl = this.bannerData.banner_settings.privacy_url || '#';
-
-                    return `
-                        <h3 class="cookie-banner-heading">Cookie Preferences</h3>
-                        <p class="cookie-banner-description">
-                            We use cookies to enhance your browsing experience and analyze our traffic.
-                            Please select which cookies you want to allow on this site.
-                            <a href="${privacyUrl}" target="_blank" class="cookie-banner-link">Privacy Policy</a>
-                        </p>
-                        
-                        <div class="cookie-banner-buttons">
-                            <button class="cookie-banner-button cookie-banner-button-secondary" data-action="reject-all">
-                                Reject All
-                            </button>
-                            <button class="cookie-banner-button cookie-banner-button-secondary" data-action="manage">
-                                Manage Cookies
-                            </button>
-                            <button class="cookie-banner-button cookie-banner-button-primary" data-action="accept-all">
-                                Accept All
-                            </button>
-                        </div>
-                    `;
-                }
-
-                /**
-                 * Attach event listeners to banner buttons
-                 * @private
-                 * @param {HTMLElement} banner The banner element
-                 */
-                attachBannerEventListeners(banner) {
-                    const buttons = banner.querySelectorAll('.cookie-banner-button');
-
-                    buttons.forEach(button => {
-                        button.addEventListener('click', (event) => {
-                            const action = button.getAttribute('data-action');
-
-                            switch (action) {
-                                case 'accept-all':
-                                    this.acceptAll();
-                                    break;
-
-                                case 'reject-all':
-                                    this.rejectAll();
-                                    break;
-
-                                case 'manage':
-                                    this.showPreferencesModal();
-                                    break;
-                            }
-                        });
-                    });
-                }
-
-                /**
-                 * Show the preferences modal
-                 * @returns {CookieBannerSDK} The SDK instance
-                 */
-                showPreferencesModal() {
-                    if (this.modalElement) {
-                        return this;
-                    }
-
-                    // Create modal overlay
-                    const modalOverlay = document.createElement('div');
-                    modalOverlay.className = 'cookie-modal-overlay';
-
-                    // Create modal container
-                    const modalContainer = document.createElement('div');
-                    modalContainer.className = 'cookie-modal-container';
-
-                    // Add modal content
-                    modalContainer.innerHTML = this.generateModalHTML();
-
-                    // Add modal to overlay
-                    modalOverlay.appendChild(modalContainer);
-
-                    // Add to DOM
-                    document.body.appendChild(modalOverlay);
-                    this.modalElement = modalOverlay;
-
-                    // Add event listeners
-                    this.attachModalEventListeners(modalContainer);
-
-                    // Trigger callback
-                    this.options.onModalShown();
-                    
-                    // Notify parent
-                    postToParent('modalShown', {});
-
-                    return this;
-                }
-
-                generateModalHTML() {
-                    const types = this.bannerData.cookie_types;
-                    const privacyUrl = this.bannerData.banner_settings.privacy_url || '#';
-
-                    let cookieTypesHTML = '';
-
-                    types.filter(type => type.status === 'Enabled').forEach(type => {
-                        const isNecessary = type.name === 'Necessary';
-                        const isEnabled = type.status === 'Enabled';
-
-                        cookieTypesHTML += `
-                            <div class="cookie-type-section">
-                                <div class="cookie-type-header">
-                                    <input 
-                                        type="checkbox" 
-                                        id="modal-cookie-type-${type.name.toLowerCase()}" 
-                                        class="cookie-checkbox"
-                                        ${isEnabled ? 'checked' : ''}
-                                        ${isNecessary ? 'disabled checked' : ''}
-                                    >
-                                    <div class="cookie-type-label">
-                                        <h4 class="cookie-type-title">${type.name} ${isNecessary ? '(Required)' : ''}</h4>
-                                        <p class="cookie-type-description">${type.description || ''}</p>
-                                    </div>
-                                </div>
-                            </div>
-                        `;
-                    });
-
-                    return `
-                        <div class="cookie-modal-header">
-                            <h3 class="cookie-modal-title">Privacy Preferences</h3>
-                            <p class="cookie-modal-description">
-                                Manage your cookie preferences below. Required cookies cannot be disabled as they
-                                are necessary for the website to function properly.
-                                <a href="${privacyUrl}" target="_blank" class="cookie-banner-link">Privacy Policy</a>
-                            </p>
-                        </div>
-                        
-                        <div class="cookie-modal-content">
-                            ${cookieTypesHTML}
-                        </div>
-                        
-                        <div class="cookie-modal-footer">
-                            <button class="cookie-banner-button cookie-banner-button-secondary" data-action="cancel">
-                                Cancel
-                            </button>
-                            <button class="cookie-banner-button cookie-banner-button-primary" data-action="save-preferences">
-                                Save Preferences
-                            </button>
-                        </div>
-                    `;
-                }
-
-                attachModalEventListeners(modal) {
-                    // Close when clicking outside the modal
-                    this.modalElement.addEventListener('click', (event) => {
-                        if (event.target === this.modalElement) {
-                            this.closeModal();
-                        }
-                    });
-
-                    // Button event listeners
-                    const buttons = modal.querySelectorAll('.cookie-banner-button');
-
-                    buttons.forEach(button => {
-                        button.addEventListener('click', (event) => {
-                            const action = button.getAttribute('data-action');
-
-                            switch (action) {
-                                case 'save-preferences':
-                                    this.saveModalPreferences();
-                                    this.closeModal();
-                                    this.close();
-                                    break;
-
-                                case 'cancel':
-                                    this.closeModal();
-                                    break;
-                            }
-                        });
-                    });
-                }
-
-                closeModal() {
-                    if (this.modalElement) {
-                        document.body.removeChild(this.modalElement);
-                        this.modalElement = null;
-
-                        // Trigger callback
-                        this.options.onModalClosed();
-                        
-                        // Notify parent
-                        postToParent('modalClosed', {});
-                    }
-
-                    return this;
-                }
-
-                saveModalPreferences() {
-                    const preferences = {};
-
-                    this.bannerData.cookie_types.forEach(type => {
-                        const checkbox = document.getElementById(`modal-cookie-type-${type.name.toLowerCase()}`);
-
-                        // Necessary cookies are always enabled
-                        if (type.name === 'Necessary') {
-                            preferences[type.name.toLowerCase()] = true;
-                            return;
-                        }
-
-                        preferences[type.name.toLowerCase()] = checkbox ? checkbox.checked : false;
-                    });
-
-                    this.saveCookiePreferences(preferences);
-                    this.options.onSavePreferences(preferences);
-                    
-                    // Notify parent
-                    postToParent('preferencesChanged', preferences);
-
-                    return preferences;
-                }
-
-                acceptAll() {
-                    const preferences = {};
-
-                    this.bannerData.cookie_types.forEach(type => {
-                        preferences[type.name.toLowerCase()] = true;
-                    });
-
-                    this.saveCookiePreferences(preferences);
-                    this.options.onAcceptAll(preferences);
-                    
-                    // Notify parent
-                    postToParent('acceptAll', preferences);
-                    
-                    this.close();
-
-                    return this;
-                }
-
-                rejectAll() {
-                    const preferences = {};
-
-                    this.bannerData.cookie_types.forEach(type => {
-                        // Necessary cookies are always enabled
-                        preferences[type.name.toLowerCase()] = type.name === 'Necessary';
-                    });
-
-                    this.saveCookiePreferences(preferences);
-                    this.options.onRejectAll(preferences);
-                    
-                    // Notify parent
-                    postToParent('rejectAll', preferences);
-                    
-                    this.close();
-
-                    return this;
-                }
-
-                saveCookiePreferences(preferences) {
-                    const storageKey = `cookie-preferences-${this.clientId}`;
-                    const data = {
-                        preferences,
-                        timestamp: new Date().toISOString(),
-                        version: this.bannerData.cookie_key || '1.0',
-                        domain: domain // Use domain from the URL parameters
-                    };
-
-                    // Store preferences in this iframe's localStorage
-                    localStorage.setItem(storageKey, JSON.stringify(data));
-                }
-
-                isAllowed(cookieType) {
-                    const storageKey = `cookie-preferences-${this.clientId}`;
-                    const storedData = localStorage.getItem(storageKey);
-
-                    if (!storedData) {
-                        // If no preferences saved, only necessary cookies are allowed by default
-                        return cookieType.toLowerCase() === 'necessary';
-                    }
-
-                    try {
-                        const data = JSON.parse(storedData);
-                        return data.preferences[cookieType.toLowerCase()] === true;
-                    } catch (error) {
-                        console.error('Error parsing cookie preferences:', error);
-                        return cookieType.toLowerCase() === 'necessary';
-                    }
-                }
-
-                close() {
-                    if (this.bannerElement) {
-                        document.body.removeChild(this.bannerElement);
-                        this.bannerElement = null;
-
-                        // Trigger callback
-                        this.options.onBannerClosed();
-                        
-                        // Notify parent
-                        postToParent('bannerClosed', {});
-                    }
-
-                    return this;
-                }
-
-                hasPreferences() {
-                    const storageKey = `cookie-preferences-${this.clientId}`;
-                    return localStorage.getItem(storageKey) !== null;
-                }
-
-                resetPreferences() {
-                    const storageKey = `cookie-preferences-${this.clientId}`;
-                    localStorage.removeItem(storageKey);
-                    
-                    // Notify parent
-                    postToParent('preferencesReset', {});
-                    
-                    return this.show();
-                }
             }
             
-            // Initialize cookie banner with parameters
+            // Initialize the SDK   
             const cookieBanner = new CookieBannerSDK(clientId, {
                 apiEndpoint: apiEndpoint,
-                onAcceptAll: function(preferences) {
-                    postToParent('preferencesChanged', preferences);
-                },
-                onRejectAll: function(preferences) {
-                    postToParent('preferencesChanged', preferences);
-                },
-                onSavePreferences: function(preferences) {
-                    postToParent('preferencesChanged', preferences);
-                },
-                onError: handleError
+                onAcceptAll: () => {
+                    console.log('All cookies accepted');
+                }
             });
-            
-            // Initialize the SDK
+
             cookieBanner.init()
-                .then(() => {
-                    // Check if preferences exist already
-                    if (!cookieBanner.hasPreferences()) {
-                        showBanner();
-                    }
+                .then(data => {
+                    console.log('Cookie banner initialized:', data);
                 })
                 .catch(error => {
-                    handleError(error);
+                    console.error('Failed to initialize Cookie Banner SDK:', error);
                 });
-                
-            // Function to show banner
-            function showBanner() {
-                try {
-                    cookieBanner.show();
-                } catch (error) {
-                    handleError(error);
-                }
-            }
-            
-            // Function to hide banner
-            function hideBanner() {
-                try {
-                    cookieBanner.close();
-                } catch (error) {
-                    handleError(error);
-                }
-            }
-            
-            // Function to reset preferences
-            function resetPreferences() {
-                try {
-                    cookieBanner.resetPreferences();
-                } catch (error) {
-                    handleError(error);
-                }
-            }
-            
-            // Export to window for debugging
-            window.cookieBanner = cookieBanner;
         })();
     </script>
 </body>
