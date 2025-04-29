@@ -6,8 +6,8 @@
     'use strict';
     
     // Configuration - Replace with your actual host URL for production
-    const IFRAME_HOST = window.CookieBannerConfig?.host || '/cookie-banner.html';
-    console.log('IFRAME_HOST', IFRAME_HOST, window.CookieBannerConfig?.host);
+    const IFRAME_HOST = window.CookieBannerConfig?.host || 'https://cdn.jsdelivr.net/gh/SharanuSb/cookie-cdn/dist/cookie-banner.html';
+    console.log('IFRAME_HOST', IFRAME_HOST);
     const VERSION = '1.1.0';
     
     class CookieBannerEmbed {
