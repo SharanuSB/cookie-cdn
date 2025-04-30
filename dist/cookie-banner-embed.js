@@ -24,7 +24,7 @@
     };
     
     class CookieBannerEmbed {
-        constructor(clientId, options = {}) {
+        constructor(clientId, options = {}, cdnRoot) {
             if (!clientId) {
                 throw new Error('Client ID is required');
             }
@@ -137,21 +137,21 @@
          */
         createIframe() {
             let iframeUrl;
+
+            console.log('IFRAME_HOST', IFRAME_HOST);
+            console.log('window.location.origin', window.location.origin);
+            console.log('window.location.hostname', window.location.hostname);
+        
             
             try {
-                // Handle both relative and absolute URLs
-                if (IFRAME_HOST.match(/^https?:\/\//)) {
-                    // Absolute URL
-                    iframeUrl = new URL(IFRAME_HOST);
-                } else {
-                    // Relative URL
-                    iframeUrl = new URL(IFRAME_HOST, window.location.origin);
-                }
+                console.log('this.cdnRoot', this.cdnRoot);
+                iframeUrl = this.cdnRoot + '/cookie-banner.html';
                 
                 // Add query parameters
                 iframeUrl.searchParams.append('clientId', this.clientId);
                 iframeUrl.searchParams.append('domain', this.options.domain);
                 iframeUrl.searchParams.append('version', this.version);
+                console.log('iframeUrl', iframeUrl);
                 
                 if (this.options.apiEndpoint) {
                     iframeUrl.searchParams.append('endpoint', this.options.apiEndpoint);
