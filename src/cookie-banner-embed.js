@@ -96,41 +96,67 @@
          * @private
          */
         createIframe() {
-            // Build URL with parameters
-            let iframeUrl = new URL(IFRAME_HOST, window.location.origin);
-            iframeUrl.searchParams.append('clientId', this.clientId);
-            iframeUrl.searchParams.append('domain', this.options.domain);
-            iframeUrl.searchParams.append('version', this.version);
-            
-            if (this.options.apiEndpoint) {
-                iframeUrl.searchParams.append('endpoint', this.options.apiEndpoint);
+            try {
+                // Ensure IFRAME_HOST is defined
+                if (!IFRAME_HOST) {
+                    throw new Error('IFRAME_HOST is not defined');
+                }
+
+                // Create base URL
+                let iframeUrl;
+                if (IFRAME_HOST.startsWith('http://') || IFRAME_HOST.startsWith('https://')) {
+                    iframeUrl = new URL(IFRAME_HOST);
+                } else {
+                    iframeUrl = new URL(IFRAME_HOST, window.location.origin);
+                }
+
+                // Create URLSearchParams object
+                const params = new URLSearchParams();
+                
+                // Add required parameters
+                params.set('clientId', this.clientId);
+                params.set('domain', this.options.domain);
+                params.set('version', this.version);
+                
+                if (this.options.apiEndpoint) {
+                    params.set('endpoint', this.options.apiEndpoint);
+                }
+
+                // Set the search parameters
+                iframeUrl.search = params.toString();
+                
+                const finalUrl = iframeUrl.toString();
+                console.log('Iframe URL:', finalUrl);
+                
+                // Create iframe element
+                const iframe = document.createElement('iframe');
+                iframe.src = finalUrl;
+                iframe.sandbox = this.options.sandbox;
+                iframe.style.cssText = `
+                    position: fixed;
+                    border: none;
+                    width: 0;
+                    height: 0;
+                    opacity: 0;
+                    pointer-events: none;
+                    z-index: 2147483647;
+                    bottom: 0;
+                    right: 0;
+                `;
+                iframe.setAttribute('title', 'Cookie Preferences');
+                iframe.setAttribute('aria-hidden', 'true');
+                iframe.setAttribute('tabindex', '-1');
+                iframe.setAttribute('role', 'dialog');
+                iframe.setAttribute('aria-label', 'Cookie Preferences Dialog');
+                
+                // Add iframe to DOM
+                document.body.appendChild(iframe);
+                
+                this.iframe = iframe;
+            } catch (error) {
+                console.error('Error creating iframe URL:', error);
+                throw new Error(`Failed to create iframe URL: ${error.message}`);
             }
-            
-            // Create iframe element
-            const iframe = document.createElement('iframe');
-            iframe.src = iframeUrl.toString();
-            iframe.sandbox = this.options.sandbox;
-            iframe.style.cssText = `
-                position: fixed;
-                border: none;
-                width: 0;
-                height: 0;
-                opacity: 0;
-                pointer-events: none;
-                z-index: 2147483647;
-                bottom: 0;
-                right: 0;
-            `;
-            iframe.setAttribute('title', 'Cookie Preferences');
-            iframe.setAttribute('aria-hidden', 'true');
-            iframe.setAttribute('tabindex', '-1');
-            iframe.setAttribute('role', 'dialog');
-            iframe.setAttribute('aria-label', 'Cookie Preferences Dialog');
-            
-            // Add iframe to DOM
-            document.body.appendChild(iframe);
-            
-            this.iframe = iframe;
         }
         
         /**

@@ -1,30 +1,17 @@
 /**
  * Cookie Banner Iframe Embed Script
- * @version 1.1.1
+ * @version 1.1.0
  */
 (function(window, document) {
     'use strict';
     
-    // Configuration - With CDN support
-    const IFRAME_HOST = window.CookieBannerConfig?.host || 'https://cdn.jsdelivr.net/gh/SharanuSb/cookie-cdn@v1.1.1/dist/cookie-banner.html';
-    console.log('[CookieBanner] Using iframe host:', IFRAME_HOST);
-    const VERSION = '1.1.1';
-    
-    // Debug helper
-    const debug = {
-        log: function(message, ...args) {
-            console.log(`[CookieBanner] ${message}`, ...args);
-        },
-        error: function(message, ...args) {
-            console.error(`[CookieBanner] ${message}`, ...args);
-        },
-        warn: function(message, ...args) {
-            console.warn(`[CookieBanner] ${message}`, ...args);
-        }
-    };
+    // Configuration - Replace with your actual host URL for production
+    const IFRAME_HOST = window.CookieBannerConfig?.host || '/cookie-banner.html';
+    console.log('IFRAME_HOST', IFRAME_HOST, window.CookieBannerConfig?.host);
+    const VERSION = '1.1.0';
     
     class CookieBannerEmbed {
-        constructor(clientId, options = {}, cdnRoot) {
+        constructor(clientId, options = {}) {
             if (!clientId) {
                 throw new Error('Client ID is required');
             }
@@ -36,7 +23,7 @@
                 apiEndpoint: options.apiEndpoint || null,
                 domain: options.domain || window.location.hostname,
                 sandbox: options.sandbox || 'allow-scripts allow-same-origin allow-forms',
-                targetOrigin: '*', // Use * to allow cross-origin communication with iframe
+                targetOrigin: options.targetOrigin || window.location.origin,
                 callbacks: {
                     onAcceptAll: options.onAcceptAll || function() {},
                     onRejectAll: options.onRejectAll || function() {},
@@ -47,19 +34,13 @@
                     onModalClosed: options.onModalClosed || function() {},
                     onPreferencesChanged: options.onPreferencesChanged || function() {},
                     onInitialized: options.onInitialized || function() {},
-                    onError: options.onError || function(error) { console.error('[CookieBanner] Error:', error); }
+                    onError: options.onError || function(error) { console.error('Cookie Banner Error:', error); }
                 }
             };
             
             this.iframe = null;
             this.initialized = false;
             this.initPromise = null;
-            
-            debug.log('Initialized with config:', {
-                clientId: this.clientId,
-                apiEndpoint: this.apiEndpoint,
-                domain: this.options.domain
-            });
         }
         
         /**
@@ -77,8 +58,6 @@
 
             this.initPromise = new Promise((resolve, reject) => {
                 try {
-                    debug.log('Creating iframe...');
-                    
                     // Create iframe if it doesn't exist
                     if (!this.iframe) {
                         this.createIframe();
@@ -88,41 +67,22 @@
                     this.setupMessageListener();
                     
                     const initTimeout = setTimeout(() => {
-                        debug.error('Initialization timed out after 10 seconds');
                         reject(new Error('Cookie banner initialization timeout'));
-                    }, 10000);
+                    }, 5000);
 
                     const initListener = (event) => {
-                        debug.log('Received message:', event.data);
-                        
-                        // More lenient origin check for CDN usage
                         if (event.data?.source === 'cookie-banner' && 
-                            event.data?.action === 'initialized') {
-                            
-                            // Only accept messages from our iframe
-                            if (this.iframe && event.source === this.iframe.contentWindow) {
-                                debug.log('Initialization successful');
-                                clearTimeout(initTimeout);
-                                window.removeEventListener('message', initListener);
-                                this.initialized = true;
-                                resolve(this);
-                            } else {
-                                debug.warn('Got initialization message but source doesn\'t match iframe');
-                            }
+                            event.data?.action === 'initialized' &&
+                            event.origin === window.location.origin) {
+                            clearTimeout(initTimeout);
+                            window.removeEventListener('message', initListener);
+                            this.initialized = true;
+                            resolve(this);
                         }
                     };
 
                     window.addEventListener('message', initListener);
-                    
-                    // Check if iframe fails to load
-                    this.iframe.onerror = (error) => {
-                        debug.error('Failed to load iframe:', error);
-                        clearTimeout(initTimeout);
-                        window.removeEventListener('message', initListener);
-                        reject(new Error('Failed to load cookie banner iframe'));
-                    };
                 } catch (error) {
-                    debug.error('Error during initialization:', error);
                     this.handleError(error);
                     reject(error);
                 }
@@ -136,29 +96,37 @@
          * @private
          */
         createIframe() {
-            let iframeUrl;
-
-            console.log('IFRAME_HOST', IFRAME_HOST);
-            console.log('window.location.origin', window.location.origin);
-            console.log('window.location.hostname', window.location.hostname);
-        
-            
             try {
-                console.log('this.cdnRoot', this.cdnRoot);
-                iframeUrl = this.cdnRoot + '/cookie-banner.html';
+                // Ensure IFRAME_HOST is defined
+                if (!IFRAME_HOST) {
+                    throw new Error('IFRAME_HOST is not defined');
+                }
+
+                // Create base URL
+                let iframeUrl;
+                if (IFRAME_HOST.startsWith('http://') || IFRAME_HOST.startsWith('https://')) {
+                    iframeUrl = new URL(IFRAME_HOST);
+                } else {
+                    iframeUrl = new URL(IFRAME_HOST, window.location.origin);
+                }
+
+                // Create URLSearchParams object
+                const params = new URLSearchParams();
                 
-                // Add query parameters
-                iframeUrl.searchParams.append('clientId', this.clientId);
-                iframeUrl.searchParams.append('domain', this.options.domain);
-                iframeUrl.searchParams.append('version', this.version);
-                console.log('iframeUrl', iframeUrl);
+                // Add required parameters
+                params.set('clientId', this.clientId);
+                params.set('domain', this.options.domain);
+                params.set('version', this.version);
                 
                 if (this.options.apiEndpoint) {
-                    iframeUrl.searchParams.append('endpoint', this.options.apiEndpoint);
+                    params.set('endpoint', this.options.apiEndpoint);
                 }
+
+                // Set the search parameters
+                iframeUrl.search = params.toString();
                 
                 const finalUrl = iframeUrl.toString();
-                debug.log('Iframe URL:', finalUrl);
+                console.log('Iframe URL:', finalUrl);
                 
                 // Create iframe element
                 const iframe = document.createElement('iframe');
@@ -186,7 +154,7 @@
                 
                 this.iframe = iframe;
             } catch (error) {
-                debug.error('Error creating iframe URL:', error);
+                console.error('Error creating iframe URL:', error);
                 throw new Error(`Failed to create iframe URL: ${error.message}`);
             }
         }
@@ -197,30 +165,27 @@
          */
         setupMessageListener() {
             window.addEventListener('message', (event) => {
-                // More permissive message handling for CDN
+                // Verify the message source and origin
+                console.log(event, "event")
+                if (!this.iframe || 
+                    event.source !== this.iframe.contentWindow ||
+                    event.origin !== window.location.origin) {
+                    return;
+                }
+                
+                const message = event.data;
+                console.log(message, "message")
+                // Check if the message is from our cookie banner
+                if (!message || message.source !== 'cookie-banner') {
+                    return;
+                }
+                
+                const action = message.action;
+                const data = message.data || {};
+                console.log(action, "action")
+                console.log(data, "data")
+                
                 try {
-                    // Verify the message is from our iframe
-                    if (!this.iframe || !this.iframe.contentWindow) {
-                        return;
-                    }
-                    
-                    // Only accept messages from our iframe
-                    if (event.source !== this.iframe.contentWindow) {
-                        return;
-                    }
-                    
-                    const message = event.data;
-                    
-                    // Check if the message is from our cookie banner
-                    if (!message || message.source !== 'cookie-banner') {
-                        return;
-                    }
-                    
-                    const action = message.action;
-                    const data = message.data || {};
-                    
-                    debug.log(`Received action: ${action}`, data);
-                    
                     // Handle message actions
                     switch (action) {
                         case 'initialized':
@@ -269,14 +234,13 @@
                             break;
                             
                         case 'error':
-                            this.handleError(new Error(data.message || 'Unknown error from cookie banner'));
+                            this.handleError(new Error(data.message));
                             break;
                             
                         default:
-                            debug.warn(`Unknown action received: ${action}`);
+                            console.warn(`Unknown action received: ${action}`);
                     }
                 } catch (error) {
-                    debug.error('Error processing message:', error);
                     this.handleError(error);
                 }
             });
@@ -288,7 +252,7 @@
          * @param {Error} error
          */
         handleError(error) {
-            debug.error('Error:', error);
+            console.error('Cookie Banner Error:', error);
             this.options.callbacks.onError(error);
         }
         
@@ -352,7 +316,6 @@
                 if (!this.initialized) {
                     await this.init();
                 }
-                debug.log('Showing banner');
                 this.sendCommand('show');
                 return this;
             } catch (error) {
@@ -366,7 +329,6 @@
          * @returns {CookieBannerEmbed}
          */
         hide() {
-            debug.log('Hiding banner');
             this.sendCommand('hide');
             return this;
         }
@@ -380,7 +342,6 @@
                 if (!this.initialized) {
                     await this.init();
                 }
-                debug.log('Resetting preferences');
                 this.sendCommand('reset');
                 return this;
             } catch (error) {
@@ -413,44 +374,6 @@
         }
         
         /**
-         * Test API connectivity (debugging method)
-         */
-        testApiConnection() {
-            if (!this.options.apiEndpoint) {
-                debug.error('No API endpoint configured');
-                return;
-            }
-            
-            const url = `${this.options.apiEndpoint}/${this.clientId}/client`;
-            debug.log('Testing API connection to:', url);
-            
-            fetch(url, {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
-                },
-                mode: 'cors'
-            })
-            .then(response => {
-                debug.log('API test response status:', response.status);
-                return response.text();
-            })
-            .then(text => {
-                debug.log('API test response length:', text.length);
-                try {
-                    const json = JSON.parse(text);
-                    debug.log('API test parsed response:', json);
-                } catch (e) {
-                    debug.error('API test failed to parse JSON:', e);
-                }
-            })
-            .catch(error => {
-                debug.error('API test fetch error:', error);
-            });
-        }
-        
-        /**
          * Send a command to the iframe
          * @private
          * @param {string} action The action to perform
@@ -462,42 +385,16 @@
                 return;
             }
             
-            debug.log(`Sending command: ${action}`, data);
-            
-            try {
-                // Use "*" for targetOrigin to support cross-origin communication
-                this.iframe.contentWindow.postMessage({
-                    source: 'cookie-banner-parent',
-                    action: action,
-                    data: data,
-                    version: this.version
-                }, "*");
-            } catch (error) {
-                debug.error('Error sending command:', error);
-                this.handleError(error);
-            }
+            this.iframe.contentWindow.postMessage({
+                source: 'cookie-banner-parent',
+                action: action,
+                data: data,
+                version: this.version
+            }, this.options.targetOrigin);
         }
     }
-    
-    // Add debugging method to the prototype
-    CookieBannerEmbed.prototype._debug = function() {
-        return {
-            iframe: this.iframe ? {
-                src: this.iframe.src,
-                contentWindow: !!this.iframe.contentWindow,
-                dimensions: {
-                    width: this.iframe.style.width,
-                    height: this.iframe.style.height
-                }
-            } : null,
-            initialized: this.initialized,
-            options: this.options,
-            clientId: this.clientId,
-            apiEndpoint: this.options.apiEndpoint
-        };
-    };
     
     // Expose to global scope
     window.CookieBannerEmbed = CookieBannerEmbed;
     
-})(window, document);
+})(window, document); 
