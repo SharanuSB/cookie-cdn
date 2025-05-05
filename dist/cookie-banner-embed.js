@@ -71,13 +71,16 @@
                     }, 5000);
 
                     const initListener = (event) => {
+                        // Remove the strict origin check
                         if (event.data?.source === 'cookie-banner' && 
-                            event.data?.action === 'initialized' &&
-                            event.origin === window.location.origin) {
-                            clearTimeout(initTimeout);
-                            window.removeEventListener('message', initListener);
-                            this.initialized = true;
-                            resolve(this);
+                            event.data?.action === 'initialized') {
+                            // Check that it's coming from our iframe
+                            if (this.iframe && event.source === this.iframe.contentWindow) {
+                                clearTimeout(initTimeout);
+                                window.removeEventListener('message', initListener);
+                                this.initialized = true;
+                                resolve(this);
+                            }
                         }
                     };
 
@@ -390,7 +393,7 @@
                 action: action,
                 data: data,
                 version: this.version
-            }, this.options.targetOrigin);
+            }, '*');
         }
     }
     
